@@ -1,0 +1,20 @@
+# The room page's variants and the paths around it.
+GET /rooms/486777696 | Cookie: $COOKIE | Accept-Encoding: gzip
+GET /rooms/486777696 | Cookie: $COOKIE | Turbo-Frame: messages | Accept-Encoding: identity
+GET /rooms/486777696 | Cookie: $COOKIE | User-Agent: | If-None-Match: W/"5897b53eee5033b34d205be50c600faa"
+HEAD /rooms/486777696 | Cookie: $COOKIE | User-Agent:
+GET /rooms/486777696 | Cookie: $COOKIE | User-Agent: Mozilla/5.0 (Windows NT 6.1; Trident/7.0; rv:11.0) like Gecko
+GET /rooms/486777696 | Cookie: $COOKIE | User-Agent: Mozilla/5.0 (Windows NT 6.1; Trident/7.0; rv:11.0) like Gecko | Turbo-Frame: x
+GET /rooms/486777696 | User-Agent:
+GET /rooms/486777696 | Cookie: session_token=garbage
+GET /rooms/999 | Cookie: $COOKIE
+GET /rooms/abc | Cookie: $COOKIE
+GET /rooms/486777696 | Cookie: $COOKIE | Accept: application/json
+GET /up
+GET /nope
+GET /nope.json
+GET /robots.txt
+GET /assets/_reset-9c3efd7b.css | Accept-Encoding: gzip
+GET /assets/_reset-9c3efd7b.css | Range: bytes=0-9
+POST /rooms/486777696 | Cookie: $COOKIE
+GET /rooms/486777696 | Cookie: $COOKIE | Sec-Fetch-Site: cross-site

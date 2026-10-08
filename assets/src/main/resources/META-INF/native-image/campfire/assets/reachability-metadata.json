@@ -1,0 +1,6 @@
+{
+  "resources": [
+    { "glob": "campfire/assets/**" },
+    { "glob": "campfire/assets/public/assets/.manifest.json" }
+  ]
+}

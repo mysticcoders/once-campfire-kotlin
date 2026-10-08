@@ -1,0 +1,19 @@
+[versions]
+kotlin = "2.4.20"
+netty = "4.2.19.Final"
+jackson = "2.22.3"
+sqlite-jdbc = "3.53.4.0"
+graal = "25.0.2"
+junit = "5.13.4"
+
+[libraries]
+netty-bom = { module = "io.netty:netty-bom", version.ref = "netty" }
+netty-codec-http = { module = "io.netty:netty-codec-http" }
+netty-epoll = { module = "io.netty:netty-transport-native-epoll" }
+netty-kqueue = { module = "io.netty:netty-transport-native-kqueue" }
+jackson-core = { module = "com.fasterxml.jackson.core:jackson-core", version.ref = "jackson" }
+sqlite-jdbc = { module = "org.xerial:sqlite-jdbc", version.ref = "sqlite-jdbc" }
+graal-svm = { module = "org.graalvm.nativeimage:svm", version.ref = "graal" }
+
+[plugins]
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

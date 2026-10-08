@@ -1,0 +1,7 @@
+/.gradle/
+build/
+/tmp/
+/native/*/
+/.env
+/.idea/
+*.iprof
