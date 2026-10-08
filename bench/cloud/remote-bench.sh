@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Runs on the load generator: drives the app server over SSH and measures GET /rooms/:id on the
-# Rust image (`rust`), this app on the JVM (`kotlin`) and as a native image (`native`), each with
-# request logging as shipped or off (`-nolog`), one app at a time on a fresh copy of the seed.
-# Every closed-loop response is checked byte for byte against the Rust page.
+# Rust image (`rust`; `rust-backlog` with rust-backlog.patch, which listens with the kernel's
+# somaxconn instead of mio's 128), this app on the JVM (`kotlin`) and as a native image (`native`),
+# each with request logging as shipped or off (`-nolog`), one app at a time on a fresh copy of the
+# seed. Every closed-loop response is checked byte for byte against the Rust page.
 #
 #   remote-bench.sh [PHASES]   default: parity closed open
 #
@@ -22,9 +23,11 @@ mkdir -p "$OUT"
 log() { echo "[$(date +%T)] $*" >&2; }
 on_app() { "${SSH[@]}" "$@"; }
 
-# Starts one app on a fresh copy of the seed and waits for /up.
+# Starts one app on a fresh copy of the seed and waits for /up. With TIMED=1 it prints the
+# milliseconds from `docker run` to the first /up and to the first room page, polled on the app
+# server itself.
 start() {
-  on_app bash -s -- "$1" <<'REMOTE'
+  on_app env TIMED="${TIMED:-}" COOKIE="$COOKIE" ROOM="$ROOM" bash -s -- "$1" <<'REMOTE'
 set -euo pipefail
 app=$1
 docker rm -f campfire >/dev/null 2>&1 || true
@@ -33,12 +36,19 @@ common=(-d --name campfire --network host --ulimit nofile=1048576:1048576 --env-
   -e RAILS_LOG_LEVEL=warn -e RAILS_MAX_THREADS=5 -e HTTP_PORT=4390 -e TARGET_PORT=4391)
 case $app in *-nolog) common+=(-e LOG_REQUESTS=false) ;; esac
 kotlin_env=(-e CAMPFIRE_STORAGE_PATH=/data -e CAMPFIRE_DATABASE_PATH=/data/db/production.sqlite3 -e CAMPFIRE_FILES_PATH=/data/files -v /root/run:/data)
+t0=$(date +%s%N)
 case ${app%-nolog} in
   rust) docker run "${common[@]}" -v /root/run/db:/rails/storage/db -v /root/run/files:/rails/storage/files campfire-rust:app >/dev/null ;;
+  rust-backlog) docker run "${common[@]}" -v /root/run/db:/rails/storage/db -v /root/run/files:/rails/storage/files campfire-rust:backlog >/dev/null ;;
   kotlin) docker run "${common[@]}" "${kotlin_env[@]}" -e JAVA_OPTS="${KOTLIN_JAVA_OPTS:--XX:+UseParallelGC}" \
     -v /root/kotlin:/app:ro eclipse-temurin:25-jre /app/bin/campfire >/dev/null ;;
   native) docker run "${common[@]}" "${kotlin_env[@]}" -v /root/native:/app:ro debian:trixie-slim /app/campfire >/dev/null ;;
 esac
+if [ -n "$TIMED" ]; then
+  until curl -fs -o /dev/null http://127.0.0.1:4390/up; do sleep 0.002; done; t1=$(date +%s%N)
+  until curl -fs -o /dev/null -H "Cookie: $COOKIE" http://127.0.0.1:4390/rooms/$ROOM; do sleep 0.002; done; t2=$(date +%s%N)
+  echo "$(( (t1 - t0) / 1000000 )) $(( (t2 - t0) / 1000000 ))"
+fi
 REMOTE
   for _ in $(seq 1 1500); do curl -fs -o /dev/null "$BASE/up" && return 0; sleep 0.02; done
   on_app docker logs campfire | tail -20 >&2; return 1
@@ -239,6 +249,42 @@ phase_soak() {
 }
 
 phase_summary() { summary; }
+
+# Time from `docker run` to the first /up and the first room page, and memory idle after start and
+# after the warmup, 5 starts per app; plus a bare container's start for Docker's own share.
+phase_startup() {
+  local dir=$OUT/startup app i; mkdir -p "$dir"
+  for i in 1 2 3 4 5; do
+    echo "docker-baseline $(on_app 'a=$(date +%s%N); docker run --rm debian:trixie-slim true; echo $(( ($(date +%s%N) - a) / 1000000 ))')" | tee -a "$dir/startup.txt"
+  done
+  for app in $APPS; do
+    for i in 1 2 3 4 5; do
+      local times; times=$(TIMED=1 start "$app")
+      sleep 2
+      local idle; idle=$(app_mem)
+      warmup
+      sleep 5
+      echo "$app start_ms=${times% *} first_page_ms=${times#* } idle_mb=${idle} warm_idle_mb=$(app_mem)" | tee -a "$dir/startup.txt"
+      stop
+    done
+  done
+}
+
+# The JVM's open-loop tail at low rates: the open phase's rates 4,000 and 6,000/s again, after an
+# extra warmup with oha itself (the same requests, headers and connection count as the measurement).
+phase_jit() {
+  mkdir -p "$OUT/jit"
+  local app rep rate
+  for app in kotlin-nolog rust-nolog; do
+    for rep in 1 2; do
+      start "$app"; warmup
+      "$BIN/oha" --no-tui --disable-compression -q 4000 -z 20s -c "$OPEN_CONNS" \
+        -H "Cookie: $COOKIE" -H "Accept-Encoding: gzip" -H "User-Agent: curl/8.7.1" "$BASE/rooms/$ROOM" > /dev/null 2>&1 || true
+      for rate in 4000 6000; do open_one "$app" "$rep" "$rate" "$SECS" "$OUT/jit/$app-$rep-$rate.json"; done
+      stop
+    done
+  done
+}
 
 log "phases: $PHASES (apps: $APPS, reps: $REPS, ${SECS}s per step)"
 on_app "nproc; lscpu | grep -E 'Model name|Thread|Core|Socket'" > "$OUT/app-server.txt"

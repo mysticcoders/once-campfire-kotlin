@@ -1,0 +1,25 @@
+--- a/crates/kit/src/front/conn.rs	2026-10-08 11:06:04
++++ b/crates/kit/src/front/conn.rs	2026-10-08 11:06:04
+@@ -119,10 +119,20 @@
+ /// Binds `:port` the way Go's `net.Listen("tcp", ":port")` does: every address, IPv6 and IPv4,
+ /// or IPv4 alone where there's no IPv6.
+ pub async fn bind(port: u16) -> std::io::Result<TcpListener> {
+-    match TcpListener::bind(SocketAddr::from(([0u16; 8], port))).await {
++    match listen(SocketAddr::from(([0u16; 8], port))) {
+         Ok(listener) => Ok(listener),
+-        Err(_) => TcpListener::bind(SocketAddr::from(([0u8; 4], port))).await,
++        Err(_) => listen(SocketAddr::from(([0u8; 4], port))),
+     }
++}
++
++/// Listens on `addr` with the kernel's `somaxconn` as the backlog, as Go's `net.Listen` does,
++/// rather than mio's fixed 128.
++fn listen(addr: SocketAddr) -> std::io::Result<TcpListener> {
++    let socket = if addr.is_ipv4() { tokio::net::TcpSocket::new_v4()? } else { tokio::net::TcpSocket::new_v6()? };
++    socket.set_reuseaddr(true)?;
++    socket.bind(addr)?;
++    let somaxconn = std::fs::read_to_string("/proc/sys/net/core/somaxconn").ok().and_then(|s| s.trim().parse::<u32>().ok());
++    socket.listen(somaxconn.unwrap_or(4096).min(65535))
+ }
+ 
+ /// Accepts connections until shutdown, serving each with `serve_connection`.

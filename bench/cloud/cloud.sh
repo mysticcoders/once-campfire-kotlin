@@ -4,8 +4,9 @@
 # Compares the Rust port's production image with this app on the JVM and as a native image.
 #
 #   cloud.sh up         create the SSH key, network, firewall and both servers, wait for cloud-init
-#   cloud.sh provision  upload sources, build the Rust image, SQLite, the native image, loadgen and
-#                       oha on the load generator, and install the apps and seed on the app server
+#   cloud.sh provision  upload sources, build the Rust image (and one with rust-backlog.patch),
+#                       SQLite, the native image, loadgen and oha on the load generator, and install
+#                       the apps and seed on the app server
 #   cloud.sh run [ARGS] run remote-bench.sh on the load generator (in the background; see `logs`)
 #   cloud.sh logs       follow the run's log
 #   cloud.sh fetch      copy the results to tmp/cloud/results/
@@ -73,7 +74,7 @@ provision() {
   (cd "$ROOT" && JAVA_HOME=$(mise where java) ./gradlew -q :campfire:installDist)
   rm -rf "$STATE/stage" && mkdir -p "$STATE/stage"
   sqlite3 "$ROOT/tmp/seed.sqlite3" ".backup '$STATE/stage/production.sqlite3'"
-  cp "$ROOT/tmp/cookie" "$RUST/parity/.env.reference" "$HERE/remote-bench.sh" "$ROOT/build/pgo/room.iprof" "$STATE/stage/"
+  cp "$ROOT/tmp/cookie" "$RUST/parity/.env.reference" "$HERE/remote-bench.sh" "$HERE/rust-backlog.patch" "$ROOT/build/pgo/room.iprof" "$STATE/stage/"
 
   log "uploading sources to the load generator"
   on lg mkdir -p /root/src/rust /root/src/verification /root/src/sqlite /root/kotlin /root/seed /root/.ssh
@@ -91,6 +92,9 @@ provision() {
 set -euo pipefail
 cd /root/src/rust
 DOCKER_BUILDKIT=1 docker buildx build --load -q -t campfire-rust:app --build-arg APP_VERSION=bench --build-arg GIT_REVISION=bench . > /root/build-rust.log 2>&1 || { tail -40 /root/build-rust.log; exit 1; }
+rm -rf /root/src/rust-backlog && cp -a /root/src/rust /root/src/rust-backlog && cd /root/src/rust-backlog && patch -s -p1 < /root/seed/rust-backlog.patch
+DOCKER_BUILDKIT=1 docker buildx build --load -q -t campfire-rust:backlog --build-arg APP_VERSION=bench --build-arg GIT_REVISION=bench . > /root/build-rust-backlog.log 2>&1 || { tail -40 /root/build-rust-backlog.log; exit 1; }
+cd /root
 mkdir -p /root/kotlin/native/linux-x86_64 /root/static
 docker run --rm -v /root/src/sqlite:/s:ro -v /root/kotlin/native/linux-x86_64:/out -v /root/static:/static rust:1.98.1-trixie bash -c \
   'cc $(cat /s/sqlite-flags.txt) /s/sqlite3.c -o /out/libcampfire_sqlite3.so -lpthread -ldl -lm &&
@@ -117,7 +121,7 @@ REMOTE
 set -euo pipefail
 SSH="ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR root@$app_ip"
 RSYNC="rsync -az --delete -e 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR'"
-docker save campfire-rust:app eclipse-temurin:25-jre debian:trixie-slim | \${SSH/ssh -n/ssh} docker load -q
+docker save campfire-rust:app campfire-rust:backlog eclipse-temurin:25-jre debian:trixie-slim | \${SSH/ssh -n/ssh} docker load -q
 \$SSH mkdir -p /root/kotlin /root/native /root/seed
 eval \$RSYNC /root/kotlin/ root@$app_ip:/root/kotlin/
 eval \$RSYNC /root/native/ root@$app_ip:/root/native/
