@@ -22,7 +22,7 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 HERE=$ROOT/bench/cloud
 STATE=$ROOT/tmp/cloud
 RUST=${RUST_ROOT:-$ROOT/../once-campfire-rust}
-VERIFICATION=$ROOT/../once-campfire-verification
+VERIFICATION=${VERIFICATION_ROOT:-$ROOT/../once-campfire-verification}
 SQLITE_SRC=${SQLITE_SRC:-$HOME/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libsqlite3-sys-0.38.2/sqlite3}
 GRAAL_IMAGE=${GRAAL_IMAGE:-container-registry.oracle.com/graalvm/native-image:25}
 LOCATION=${LOCATION:-ash} APP_TYPE=${APP_TYPE:-ccx13} LG_TYPE=${LG_TYPE:-ccx33} IMAGE=${IMAGE:-ubuntu-24.04}
@@ -74,7 +74,8 @@ provision() {
   (cd "$ROOT" && JAVA_HOME=$(mise where java) ./gradlew -q :campfire:installDist)
   rm -rf "$STATE/stage" && mkdir -p "$STATE/stage"
   sqlite3 "$ROOT/tmp/seed.sqlite3" ".backup '$STATE/stage/production.sqlite3'"
-  cp "$ROOT/tmp/cookie" "$RUST/parity/.env.reference" "$HERE/remote-bench.sh" "$HERE/rust-backlog.patch" "$ROOT/build/pgo/room.iprof" "$STATE/stage/"
+  cp "$ROOT/tmp/cookie" "$RUST/parity/.env.reference" "$HERE/remote-bench.sh" "$HERE/rust-backlog.patch" "$STATE/stage/"
+  if [ -f "$ROOT/build/pgo/room.iprof" ]; then cp "$ROOT/build/pgo/room.iprof" "$STATE/stage/"; else log "no build/pgo/room.iprof: the native image is built without PGO"; fi
 
   log "uploading sources to the load generator"
   on lg mkdir -p /root/src/rust /root/src/verification /root/src/sqlite /root/kotlin /root/seed /root/.ssh
@@ -106,7 +107,7 @@ docker run --rm -v /root/kotlin/lib:/lib-in:ro -v /root/native:/out -v /root/see
   -H:+UnlockExperimentalVMOptions -H:+ForeignAPISupport \
   --enable-native-access=ALL-UNNAMED -H:+ReportExceptionStackTraces \
   -H:NativeLinkerOption=-lm -H:CLibraryPath=/static \
-  -O3 --pgo=/pgo/room.iprof -march=x86-64-v3 campfire.app.MainKt > /root/build-native.log 2>&1 || { tail -40 /root/build-native.log; exit 1; }
+  -O3 $([ -f /root/seed/room.iprof ] && echo --pgo=/pgo/room.iprof) -march=x86-64-v3 campfire.app.MainKt > /root/build-native.log 2>&1 || { tail -40 /root/build-native.log; exit 1; }
 grep -E 'optimization level|Finished generating' /root/build-native.log || true
 docker run --rm -v /root/src/verification:/v -v /root/bin:/out rust:1.98.1-trixie bash -c \
   'cd /v/loadgen && cargo build -q --release --locked && cp target/release/loadgen /out/loadgen'

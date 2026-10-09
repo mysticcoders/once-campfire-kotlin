@@ -28,15 +28,21 @@ public final class ImageSqlite implements SqlConnection {
     private static final int ROW = 100;
     private static final int DONE = 101;
     private static final int OPEN_FLAGS = 0x2 | 0x4 | 0x40 | 0x8000;
+    private static final int OPEN_READ_ONLY_FLAGS = 0x1 | 0x40 | 0x8000;
     private static final int PREPARE_PERSISTENT = 0x1;
     private static final long TRANSIENT = -1L;
 
     private final PointerBase db;
 
     public ImageSqlite(String path) {
+        this(path, false);
+    }
+
+    /** Opens {@code path} read-write (creating it), or read-only ({@code SQLITE_OPEN_READONLY}). */
+    public ImageSqlite(String path, boolean readOnly) {
         WordPointer out = StackValue.get(WordPointer.class);
         try (CTypeConversion.CCharPointerHolder name = CTypeConversion.toCString(path)) {
-            int rc = sqlite3_open_v2(name.get(), out, OPEN_FLAGS, WordFactory.nullPointer());
+            int rc = sqlite3_open_v2(name.get(), out, readOnly ? OPEN_READ_ONLY_FLAGS : OPEN_FLAGS, WordFactory.nullPointer());
             db = out.read();
             if (rc != OK) throw new IllegalStateException("sqlite3_open_v2(" + path + "): " + errmsg());
         }

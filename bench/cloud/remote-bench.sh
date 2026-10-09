@@ -27,7 +27,7 @@ on_app() { "${SSH[@]}" "$@"; }
 # milliseconds from `docker run` to the first /up and to the first room page, polled on the app
 # server itself.
 start() {
-  on_app env TIMED="${TIMED:-}" COOKIE="$COOKIE" ROOM="$ROOM" bash -s -- "$1" <<'REMOTE'
+  on_app env TIMED="${TIMED:-}" COOKIE="$COOKIE" ROOM="$ROOM" KOTLIN_WORKERS="${KOTLIN_WORKERS:-}" KOTLIN_JAVA_OPTS="'${KOTLIN_JAVA_OPTS:-}'" bash -s -- "$1" <<'REMOTE'
 set -euo pipefail
 app=$1
 docker rm -f campfire >/dev/null 2>&1 || true
@@ -35,7 +35,7 @@ rm -rf /root/run && mkdir -p /root/run/db /root/run/files && cp /root/seed/produ
 common=(-d --name campfire --network host --ulimit nofile=1048576:1048576 --env-file /root/seed/.env.reference
   -e RAILS_LOG_LEVEL=warn -e RAILS_MAX_THREADS=5 -e HTTP_PORT=4390 -e TARGET_PORT=4391)
 case $app in *-nolog) common+=(-e LOG_REQUESTS=false) ;; esac
-kotlin_env=(-e CAMPFIRE_STORAGE_PATH=/data -e CAMPFIRE_DATABASE_PATH=/data/db/production.sqlite3 -e CAMPFIRE_FILES_PATH=/data/files -v /root/run:/data)
+kotlin_env=(${KOTLIN_WORKERS:+-e KOTLIN_WORKERS=$KOTLIN_WORKERS} -e CAMPFIRE_STORAGE_PATH=/data -e CAMPFIRE_DATABASE_PATH=/data/db/production.sqlite3 -e CAMPFIRE_FILES_PATH=/data/files -v /root/run:/data)
 t0=$(date +%s%N)
 case ${app%-nolog} in
   rust) docker run "${common[@]}" -v /root/run/db:/rails/storage/db -v /root/run/files:/rails/storage/files campfire-rust:app >/dev/null ;;

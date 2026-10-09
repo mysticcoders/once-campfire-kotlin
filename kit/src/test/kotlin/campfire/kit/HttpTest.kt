@@ -367,7 +367,19 @@ class HttpTest {
     fun forgeryProtectionAllowsAMissingHeaderOnlyWithoutSsl() {
         val app = app()
         assertEquals(200, send(app, postFrom(null)).status)
-        assertEquals(422, send(app, postFrom("cross-site")).status)
+        for (site in listOf("cross-site", "none", "bogus", "", "Same-Origin", "same-origin, same-site")) {
+            assertEquals(422, send(app, postFrom(site)).status, site)
+        }
+    }
+
+    /** `forgery_protection_requires_metadata_on_proxy_https_without_force_ssl` (`crates/kit/tests/http.rs`). */
+    @Test
+    fun forgeryProtectionRequiresMetadataOnProxyHttpsWithoutForceSsl() {
+        val app = app()
+        fun proxied(site: String?) = postFrom(site).also { it.headers.add("x-forwarded-proto", "https") }
+        assertEquals(422, send(app, proxied(null)).status)
+        assertEquals(200, send(app, proxied("same-origin")).status)
+        assertEquals(200, send(app, proxied("same-site")).status)
     }
 
     @Test

@@ -11,6 +11,7 @@ class App(val config: Config) {
     val secrets = Secrets(config.secretKeyBase)
     val db = Database(config.databasePath, config.readers)
     val fragments = FragmentCache(config.fragmentCacheBytes)
+    val responseCache = ResponseCache.Store.open(db.path, config.responseCacheBytes)
 }
 
 /** `Current.user`. */

@@ -2,7 +2,9 @@
 # Byte parity for arbitrary requests against the Rust port: like parity.sh, but each line of
 # Last-Modified is masked too: static files carry each build's own time.
 # REQUESTS_FILE is `METHOD PATH [Header: value]...` separated by ` | `, with $COOKIE standing for the
-# session cookie. Status, decoded body and headers (normalized as parity.sh does) must match.
+# session cookie. Status, decoded body and headers (normalized as parity.sh does, a gzipped
+# response's Content-Length included) must match. Requests run in file order against one pair of
+# apps, so repeating one checks the response cache's miss and hit.
 #   bench/parity-requests.sh DB COOKIE_FILE REQUESTS_FILE
 # KOTLIN_EXTERNAL=1 uses a Kotlin app already listening on 4490 (a native image in Docker, say).
 set -euo pipefail
@@ -27,7 +29,8 @@ for port in 4390 4490; do
 done
 normalized() {
   tr -d '\r' < "$1" | grep -v -i -E '^(date|x-request-id|x-runtime|last-modified):' \
-    | sed -E 's/^(set-cookie: (_campfire_session|session_token)=)[^;]*/\1<signed>/; s/(expires=)[^;]*/\1<time>/'
+    | sed -E 's/^(set-cookie: (_campfire_session|session_token)=)[^;]*/\1<signed>/; s/(expires=)[^;]*/\1<time>/' \
+    | if grep -q -i '^content-encoding: *gzip' "$1"; then sed -E 's/^(content-length: ).*/\1<gzip length>/'; else cat; fi
 }
 checks=0 differences=0
 while IFS= read -r line; do

@@ -15,6 +15,7 @@ import campfire.kit.Redirect
 import campfire.kit.halt
 import campfire.rails.globalIdParam
 import campfire.views.BoostView
+import campfire.views.FragmentCache
 import campfire.views.FragmentKeys
 import campfire.views.LayoutContext
 import campfire.views.MessageView
@@ -26,12 +27,16 @@ import campfire.views.renderRoomShow
 
 /** `RoomsController` (`crates/campfire/src/controllers/rooms.rs`). */
 object RoomsController {
-    /** `show`, also `GET /rooms/:room_id/@:message_id`. */
+    /**
+     * `show`, also `GET /rooms/:room_id/@:message_id`. A response the [ResponseCache] kept for
+     * this request is served once authentication, the room's permission check and the
+     * `last_room` cookie have run.
+     */
     val show = Action { c ->
         beforeActions(c)
         val room = setRoom(c)
         rememberLastRoomVisited(c, room.id)
-        renderShow(c, room)
+        ResponseCache.lookup(c) ?: renderShow(c, room)
     }
 
     /** `set_room`: `room_scope.find_by(id: params[:room_id] || params[:id])`, or back to the root with an alert. */
@@ -47,10 +52,11 @@ object RoomsController {
         c.respondTo(Mime.HTML)
         if (c.paramStr("message_id") != null) throw Unsupported("the page around a message")
         val app = c.state<App>()
+        val fragments = ResponseCache.fragments(c)
         val user = currentUser(c)!!
         val show = app.db.read { r ->
-            val messages = r.lastPage<Fragment>(room.id) { app.fragments.get(messageKey(it), Fragment::class.java) }
-            val presenter = Presenter(r, app, c.now(), c.request.host())
+            val messages = r.lastPage<Fragment>(room.id) { fragments.get(messageKey(it), Fragment::class.java) }
+            val presenter = Presenter(r, app, fragments, c.now(), c.request.host())
             val original = r.originalRoomId() == room.id
             ShowView(
                 roomId = room.id,
@@ -135,8 +141,11 @@ private fun displayName(r: Reader, room: Room, forUser: User?): String {
     return if (sentence.isBlank()) forUser?.name ?: "" else sentence
 }
 
-/** Looks rows up for a page of messages, remembering the rooms and users it has seen. */
-private class Presenter(private val r: Reader, private val app: App, now: java.time.Instant, requestHost: String?) {
+/**
+ * Looks rows up for a page of messages, remembering the rooms and users it has seen; message
+ * fragments come from and go to [fragments], the request's view of the fragment store.
+ */
+private class Presenter(private val r: Reader, private val app: App, private val fragments: FragmentCache, now: java.time.Instant, requestHost: String?) {
     private val richText = campfire.richtext.RenderContext(DbResolver(r, app.secrets, now), requestHost)
     private val users = HashMap<Long, User?>()
     private val roomNames = HashMap<Long, String>()
@@ -144,7 +153,7 @@ private class Presenter(private val r: Reader, private val app: App, now: java.t
     /** The message's cached fragment, or its render, stored for the next request. */
     fun fragment(page: PageMessage<Fragment>): Fragment {
         page.fragment?.let { return it }
-        return app.fragments.fetch(messageKey(page.key), Fragment::class.java, { it.bytes.size }) {
+        return fragments.fetch(messageKey(page.key), Fragment::class.java, { it.bytes.size }) {
             Fragment(renderMessage(view(page.message!!)).toByteArray(Charsets.UTF_8))
         }
     }

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Byte parity against the Rust port: runs ../once-campfire-rust's release binary and this app on
 # copies of one database, requests the room page from both with each user agent and encoding, and
-# compares the decoded bodies and ETags.
+# compares the decoded bodies and ETags. A gzipped response's Content-Length is masked: the JDK's
+# zlib and the Rust port's zlib-rs compress to different bytes (README, "Gzip bytes").
 #   bench/parity.sh DB COOKIE_FILE [ROOM]
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -24,7 +25,8 @@ done
 status=0 differences=0 checks=0
 normalized() {
   tr -d '\r' < "$1" | grep -v -i -E '^(date|x-request-id|x-runtime):' \
-    | sed -E 's/^(set-cookie: (_campfire_session|session_token)=)[^;]*/\1<signed>/; s/(expires=)[^;]*/\1<time>/'
+    | sed -E 's/^(set-cookie: (_campfire_session|session_token)=)[^;]*/\1<signed>/; s/(expires=)[^;]*/\1<time>/' \
+    | if grep -q -i '^content-encoding: *gzip' "$1"; then sed -E 's/^(content-length: ).*/\1<gzip length>/'; else cat; fi
 }
 uas=('' 'curl/8.7.1')
 if [ -n "${PARITY_UAS:-}" ]; then mapfile -t uas < "$PARITY_UAS"; fi

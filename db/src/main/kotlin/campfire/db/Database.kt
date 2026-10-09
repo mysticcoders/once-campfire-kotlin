@@ -138,3 +138,25 @@ class Writer(path: String, queueSize: Int = 256) {
         }
     }
 }
+
+/**
+ * `PRAGMA data_version` on a read-only connection of its own, as the response cache's `Observer`
+ * in `crates/campfire/src/response_cache.rs` reads it: SQLite changes the value after every commit
+ * by another connection (the app's writer, its readers never write, or another process) and never
+ * for reads, so it tells whether anything committed since it was last read. The connection waits
+ * at most 50 ms for a lock, as Rust's does. Not thread-safe: the caller serializes [read].
+ */
+class DataVersion(path: String) {
+    private val conn = SqliteBackend.open(path, readOnly = true).also { it.execute("PRAGMA busy_timeout = 50") }
+    private val pragma = conn.prepare("PRAGMA data_version")
+
+    /** The current value; throws when SQLite can't answer (a lock held past the timeout, say). */
+    fun read(): Long {
+        try {
+            check(pragma.step()) { "PRAGMA data_version returned no row" }
+            return pragma.integer(1)
+        } finally {
+            pragma.reset()
+        }
+    }
+}

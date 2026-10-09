@@ -18,3 +18,22 @@ GET /assets/_reset-9c3efd7b.css | Accept-Encoding: gzip
 GET /assets/_reset-9c3efd7b.css | Range: bytes=0-9
 POST /rooms/486777696 | Cookie: $COOKIE
 GET /rooms/486777696 | Cookie: $COOKIE | Sec-Fetch-Site: cross-site
+# The response cache: one request repeated (its first is a miss that is kept, then hits), gzip and
+# identity, HEAD and a conditional GET served from the kept response, and a bypass.
+GET /rooms/486777696 | Cookie: $COOKIE | User-Agent: cache-check | Accept-Encoding: identity
+GET /rooms/486777696 | Cookie: $COOKIE | User-Agent: cache-check | Accept-Encoding: identity
+GET /rooms/486777696 | Cookie: $COOKIE | User-Agent: cache-check | Accept-Encoding: identity
+GET /rooms/486777696 | Cookie: $COOKIE | User-Agent: cache-check | Accept-Encoding: gzip
+GET /rooms/486777696 | Cookie: $COOKIE | User-Agent: cache-check | Accept-Encoding: gzip
+HEAD /rooms/486777696 | Cookie: $COOKIE | User-Agent: cache-check | Accept-Encoding: identity
+GET /rooms/486777696 | Cookie: $COOKIE | User-Agent: cache-check | Accept-Encoding: identity | If-None-Match: *
+GET /rooms/486777696 | Cookie: $COOKIE | User-Agent: cache-check | Accept-Encoding: identity | Cache-Control: no-cache
+GET /rooms/486777696 | Cookie: $COOKIE | User-Agent: cache-check | Accept-Encoding: identity | Turbo-Frame: messages
+GET /rooms/486777696 | Cookie: $COOKIE | User-Agent: cache-check | Accept-Encoding: identity | Turbo-Frame: messages
+# Another session's first request refreshes its activity, a commit that moves the database
+# generation on: the kept responses above are stale, so these miss, are kept again, then hit.
+GET /rooms/486777696 | Cookie: session_token=eyJfcmFpbHMiOnsibWVzc2FnZSI6IklrRjRTbk01TkdaMFpWRTFRWFYwZGpKV2NrdHpTRFk0WXlJPSIsImV4cCI6IjIwNDYtMDktMjZUMTM6MTQ6NTIuODc3WiIsInB1ciI6ImNvb2tpZS5zZXNzaW9uX3Rva2VuIn19--958d9639acf62d4748990cd880ea1af466dd10f0 | User-Agent: cache-check | Accept-Encoding: identity
+GET /rooms/486777696 | Cookie: $COOKIE | User-Agent: cache-check | Accept-Encoding: identity
+GET /rooms/486777696 | Cookie: $COOKIE | User-Agent: cache-check | Accept-Encoding: identity
+GET /rooms/486777696 | Cookie: $COOKIE | User-Agent: cache-check | Accept-Encoding: gzip
+GET /rooms/486777696 | Cookie: $COOKIE | User-Agent: cache-check | Accept-Encoding: gzip

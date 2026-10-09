@@ -278,7 +278,7 @@ class Reader(path: String) {
  * request takes a free reader for each read and gives it back, so at most that many requests are
  * inside SQLite at once, as with `crates/db/src/database.rs`.
  */
-class Database(path: String, readers: Int) {
+class Database(val path: String, readers: Int) {
     private val pool = java.util.concurrent.ArrayBlockingQueue<Reader>(readers).apply { repeat(readers) { add(Reader(path)) } }
     private val writer by lazy { Writer(path) }
 

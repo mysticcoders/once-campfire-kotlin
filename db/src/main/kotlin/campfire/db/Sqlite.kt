@@ -45,21 +45,22 @@ interface SqlConnection {
 
 /**
  * Opens reader connections with the backend `KOTLIN_SQLITE` names: `native` (default; FFM on a JVM,
- * the C interface in a native image) or `jdbc`.
+ * the C interface in a native image) or `jdbc`. A [readOnly] connection is opened with
+ * `SQLITE_OPEN_READONLY` instead of read-write and create.
  */
 object SqliteBackend {
     val name: String = System.getenv("KOTLIN_SQLITE") ?: "native"
 
-    fun open(path: String, backend: String = name): SqlConnection = when (backend) {
-        "jdbc" -> JdbcConnection(path)
-        "native" -> if (System.getProperty("org.graalvm.nativeimage.imagecode") == "runtime") campfire.db.graal.ImageSqlite(path) else NativeConnection(path)
+    fun open(path: String, backend: String = name, readOnly: Boolean = false): SqlConnection = when (backend) {
+        "jdbc" -> JdbcConnection(path, readOnly)
+        "native" -> if (System.getProperty("org.graalvm.nativeimage.imagecode") == "runtime") campfire.db.graal.ImageSqlite(path, readOnly) else NativeConnection(path, readOnly)
         else -> error("KOTLIN_SQLITE must be native or jdbc, not $backend")
     }
 }
 
 /** sqlite-jdbc behind [Stmt]: the spike's first backend. */
-private class JdbcConnection(path: String) : SqlConnection {
-    private val conn = DriverManager.getConnection("jdbc:sqlite:$path", Properties().apply { setProperty("open_mode", "6") })
+private class JdbcConnection(path: String, readOnly: Boolean) : SqlConnection {
+    private val conn = DriverManager.getConnection("jdbc:sqlite:$path", Properties().apply { setProperty("open_mode", if (readOnly) "1" else "6") })
 
     override fun prepare(sql: String): Stmt = JdbcStmt(conn.prepareStatement(sql))
 
@@ -105,13 +106,13 @@ private class JdbcConnection(path: String) : SqlConnection {
  * and a critical call must finish quickly in every case. Statements are prepared with
  * `SQLITE_PREPARE_PERSISTENT` and live as long as their connection.
  */
-private class NativeConnection(path: String) : SqlConnection {
+private class NativeConnection(path: String, readOnly: Boolean) : SqlConnection {
     private val db: MemorySegment
 
     init {
         Arena.ofConfined().use { arena ->
             val out = arena.allocate(ADDRESS)
-            val rc = Sqlite.open.invokeExact(arena.allocateFrom(path), out, OPEN_READWRITE or OPEN_CREATE or OPEN_NOMUTEX or OPEN_URI, MemorySegment.NULL) as Int
+            val rc = Sqlite.open.invokeExact(arena.allocateFrom(path), out, (if (readOnly) OPEN_READONLY else OPEN_READWRITE or OPEN_CREATE) or OPEN_NOMUTEX or OPEN_URI, MemorySegment.NULL) as Int
             db = out.get(ADDRESS, 0)
             check(rc == OK) { "sqlite3_open_v2($path): ${errmsg()}" }
         }
@@ -177,6 +178,7 @@ private class NativeConnection(path: String) : SqlConnection {
         const val OK = 0
         const val ROW = 100
         const val DONE = 101
+        const val OPEN_READONLY = 0x1
         const val OPEN_READWRITE = 0x2
         const val OPEN_CREATE = 0x4
         const val OPEN_URI = 0x40

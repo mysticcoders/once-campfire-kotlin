@@ -12,60 +12,85 @@ const val PER_ENTRY_OVERHEAD = 240
  * and [PER_ENTRY_OVERHEAD]; when a write takes the total past the limit, least recently used
  * entries go until it's back to three quarters of it, and reads count as uses. An entry over a
  * quarter of the limit is returned but not kept.
+ *
+ * [namespace] and [scoped] give views of the same entries and byte budget whose keys are prefixed
+ * with a database generation and an origin (or another rendering context), so that a render that
+ * started before a commit can only populate its own generation, and fragments whose HTML depends
+ * on the request's origin aren't shared across origins.
  */
-class FragmentCache(val maxBytes: Int = DEFAULT_FRAGMENT_CACHE_BYTES) {
+class FragmentCache private constructor(val maxBytes: Int, private val store: Store, val namespace: Long, private val scope: String?) {
+    constructor(maxBytes: Int = DEFAULT_FRAGMENT_CACHE_BYTES) : this(maxBytes, Store(), 0, null)
+
     private class Entry(val value: Any, val size: Int)
 
-    private val entries = LinkedHashMap<String, Entry>(1024, 0.75f, true)
-    private var bytes = 0L
+    /** The entries every view of one store shares, guarded by the store's own monitor. */
+    private class Store {
+        val entries = LinkedHashMap<String, Entry>(1024, 0.75f, true)
+        var bytes = 0L
+    }
+
+    /** A view of this store's entries for the database generation [namespace], unscoped. */
+    fun namespace(namespace: Long): FragmentCache = FragmentCache(maxBytes, store, namespace, null)
+
+    /** A view of this store's entries isolated to [scope] within this view's namespace. */
+    fun scoped(scope: String): FragmentCache = FragmentCache(maxBytes, store, namespace, scope)
+
+    /** [key] as the store holds it in this view: `\0<namespace>:<scope length>:<scope>/<key>` (`scoped_key`). */
+    private fun scopedKey(key: String): String = when {
+        scope != null -> "\u0000$namespace:${scope.length}:$scope/$key"
+        namespace == 0L -> key
+        else -> "\u0000$namespace/$key"
+    }
 
     /** The value [key] holds, if any, counting as a use. */
-    @Synchronized
-    fun <T : Any> get(key: String, type: Class<T>): T? = entries[key]?.value?.let { if (type.isInstance(it)) type.cast(it) else null }
+    fun <T : Any> get(key: String, type: Class<T>): T? = read(scopedKey(key), type)
+
+    private fun <T : Any> read(key: String, type: Class<T>): T? =
+        synchronized(store) { store.entries[key] }?.value?.let { if (type.isInstance(it)) type.cast(it) else null }
 
     /**
      * `Rails.cache.fetch(key) { compute }`: the stored value, or [compute]'s, stored with
      * [sizeOf]'s payload size. When two renders race, the first one stored is what both return.
      */
     fun <T : Any> fetch(key: String, type: Class<T>, sizeOf: (T) -> Int, compute: () -> T): T {
-        get(key, type)?.let { return it }
+        val stored = scopedKey(key)
+        read(stored, type)?.let { return it }
         val value = compute()
-        return store(key, type, value, key.length + sizeOf(value) + PER_ENTRY_OVERHEAD)
+        return store(stored, type, value, stored.length + sizeOf(value) + PER_ENTRY_OVERHEAD)
     }
 
-    @Synchronized
-    private fun <T : Any> store(key: String, type: Class<T>, value: T, size: Int): T {
+    private fun <T : Any> store(key: String, type: Class<T>, value: T, size: Int): T = synchronized(store) {
+        val entries = store.entries
         val existing = entries[key]
         if (existing != null) {
             if (type.isInstance(existing.value)) return type.cast(existing.value)
             entries.remove(key)
-            bytes -= existing.size
+            store.bytes -= existing.size
         }
         if (size > maxBytes / 4) return value
         entries[key] = Entry(value, size)
-        bytes += size
-        if (bytes > maxBytes) prune(maxBytes / 4 * 3)
-        return value
+        store.bytes += size
+        if (store.bytes > maxBytes) prune(maxBytes / 4 * 3)
+        value
     }
 
     private fun prune(target: Int) {
-        val oldest = entries.entries.iterator()
-        while (bytes > target && oldest.hasNext()) {
-            bytes -= oldest.next().value.size
+        val oldest = store.entries.entries.iterator()
+        while (store.bytes > target && oldest.hasNext()) {
+            store.bytes -= oldest.next().value.size
             oldest.remove()
         }
     }
 
-    @get:Synchronized
-    val size: Int get() = entries.size
+    /** The number of entries in the whole store, across namespaces and scopes. */
+    val size: Int get() = synchronized(store) { store.entries.size }
 
-    @Synchronized
-    fun bytes(): Long = bytes
+    /** The bytes the whole store's entries take up. */
+    fun bytes(): Long = synchronized(store) { store.bytes }
 
-    @Synchronized
-    fun clear() {
-        entries.clear()
-        bytes = 0
+    fun clear() = synchronized(store) {
+        store.entries.clear()
+        store.bytes = 0
     }
 }
 
