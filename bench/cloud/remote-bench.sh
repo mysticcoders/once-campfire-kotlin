@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Runs on the load generator: drives the app server over SSH and measures GET /rooms/:id on the
 # Rust image (`rust`; `rust-backlog` with rust-backlog.patch, which listens with the kernel's
-# somaxconn instead of mio's 128), this app on the JVM (`kotlin`) and as a native image (`native`),
-# each with request logging as shipped or off (`-nolog`), one app at a time on a fresh copy of the
-# seed. Every closed-loop response is checked byte for byte against the Rust page.
+# somaxconn instead of mio's 128), this app on the JVM (`kotlin` on Temurin 25, `kotlin27` on Temurin
+# 27, `graaljit` on Oracle GraalVM 25 with the Graal JIT) and as a native image (`native`: Oracle
+# GraalVM with PGO, -O3 and Serial GC; `native-g1` the same with G1; `native-ce` GraalVM Community
+# with -O2), each with request logging as shipped or off (`-nolog`), one app at a time on a fresh copy
+# of the seed. Every closed-loop response is checked byte for byte against the Rust page.
 #
 #   remote-bench.sh [PHASES]   default: parity closed open
 #
@@ -40,9 +42,11 @@ t0=$(date +%s%N)
 case ${app%-nolog} in
   rust) docker run "${common[@]}" -v /root/run/db:/rails/storage/db -v /root/run/files:/rails/storage/files campfire-rust:app >/dev/null ;;
   rust-backlog) docker run "${common[@]}" -v /root/run/db:/rails/storage/db -v /root/run/files:/rails/storage/files campfire-rust:backlog >/dev/null ;;
-  kotlin) docker run "${common[@]}" "${kotlin_env[@]}" -e JAVA_OPTS="${KOTLIN_JAVA_OPTS:--XX:+UseParallelGC}" \
-    -v /root/kotlin:/app:ro eclipse-temurin:25-jre /app/bin/campfire >/dev/null ;;
-  native) docker run "${common[@]}" "${kotlin_env[@]}" -v /root/native:/app:ro debian:trixie-slim /app/campfire >/dev/null ;;
+  kotlin|kotlin27|graaljit)
+    declare -A jre=([kotlin]=eclipse-temurin:25-jre [kotlin27]=eclipse-temurin:27_35-jre [graaljit]=container-registry.oracle.com/graalvm/jdk:25i4)
+    docker run "${common[@]}" "${kotlin_env[@]}" -e JAVA_OPTS="${KOTLIN_JAVA_OPTS:--XX:+UseParallelGC}" \
+      -v /root/kotlin:/app:ro "${jre[${app%-nolog}]}" /app/bin/campfire >/dev/null ;;
+  native|native-g1|native-ce) docker run "${common[@]}" "${kotlin_env[@]}" -v "/root/${app%-nolog}:/app:ro" debian:trixie-slim /app/campfire >/dev/null ;;
 esac
 if [ -n "$TIMED" ]; then
   until curl -fs -o /dev/null http://127.0.0.1:4390/up; do sleep 0.002; done; t1=$(date +%s%N)
@@ -83,12 +87,16 @@ print(f"contract: {len(body)} bytes, {len(ids)} messages")
 PY
 }
 
-# Bodies, ETags and headers (less Date, X-Request-Id, signed cookie values and expiry times) of each app against Rust's, for both
-# user-agent branches and both encodings.
+# The apps in APPS other than Rust, without the -nolog suffix and each once.
+kotlin_apps() { for app in $APPS; do app=${app%-nolog}; case $app in rust*) ;; *) echo "$app" ;; esac; done | awk '!seen[$0]++'; }
+
+# Bodies, ETags and headers (less Date, X-Request-Id, signed cookie values and expiry times, and a gzipped body's
+# Content-Length, since zlib builds compress to different bytes) of each app against Rust's, for both user-agent branches and
+# both encodings.
 phase_parity() {
   local dir=$OUT/parity; mkdir -p "$dir"
   local app ua enc
-  for app in rust-nolog kotlin-nolog native-nolog; do
+  for app in rust-nolog $(kotlin_apps | sed 's/$/-nolog/'); do
     start "$app"
     for ua in none curl; do
       for enc in identity gzip; do
@@ -96,13 +104,14 @@ phase_parity() {
         [ "$ua" = none ] && h+=(-H "User-Agent:") || h+=(-H "User-Agent: curl/8.7.1")
         curl -s --compressed "${h[@]}" -D "$dir/${app%-nolog}-$ua-$enc.headers" -o "$dir/${app%-nolog}-$ua-$enc.body" "$BASE/rooms/$ROOM"
         tr -d '\r' < "$dir/${app%-nolog}-$ua-$enc.headers" | grep -v -i -E '^(date|x-request-id|x-runtime):' \
-          | sed -E 's/^(set-cookie: (_campfire_session|session_token)=)[^;]*/\1<signed>/; s/(expires=)[^;]*/\1<time>/' > "$dir/${app%-nolog}-$ua-$enc.norm"
+          | sed -E 's/^(set-cookie: (_campfire_session|session_token)=)[^;]*/\1<signed>/; s/(expires=)[^;]*/\1<time>/' \
+          | if [ "$enc" = gzip ]; then sed -E 's/^(content-length: ).*/\1<gzip length>/I'; else cat; fi > "$dir/${app%-nolog}-$ua-$enc.norm"
       done
     done
     stop
   done
   local status=0
-  for app in kotlin native; do
+  for app in $(kotlin_apps); do
     for ua in none curl; do
       for enc in identity gzip; do
         if cmp -s "$dir/rust-$ua-$enc.body" "$dir/$app-$ua-$enc.body" && cmp -s "$dir/rust-$ua-$enc.norm" "$dir/$app-$ua-$enc.norm"; then
@@ -271,11 +280,12 @@ phase_startup() {
 }
 
 # The JVM's open-loop tail at low rates: the open phase's rates 4,000 and 6,000/s again, after an
-# extra warmup with oha itself (the same requests, headers and connection count as the measurement).
+# extra warmup with oha itself (the same requests, headers and connection count as the measurement),
+# for the JVM apps in APPS and Rust.
 phase_jit() {
   mkdir -p "$OUT/jit"
   local app rep rate
-  for app in kotlin-nolog rust-nolog; do
+  for app in $(kotlin_apps | grep -v '^native' | sed 's/$/-nolog/') rust-nolog; do
     for rep in 1 2; do
       start "$app"; warmup
       "$BIN/oha" --no-tui --disable-compression -q 4000 -z 20s -c "$OPEN_CONNS" \
